@@ -20,13 +20,14 @@ IEDB = http:\/\/iedb\.org\/taxon-protein\/
 # IEDB files
 ORG_TREE = dependencies/organism-tree.owl
 SUB_TREE = dependencies/subspecies-tree.owl
+NP_TREE = dependencies/non-peptide-tree.owl
 PROTEIN_TABLE = dependencies/parent-proteins.csv
 
 # ----------------------------------------
 # PROTEIN TREE
 # ----------------------------------------
 
-all: protein-tree.owl clean
+all: protein-tree.owl molecule-tree.owl clean
 
 # The protein tree is a product of:
 # - taxon-proteins: NCBITaxon classes as proteins
@@ -41,6 +42,12 @@ protein-tree.owl: build/taxon-proteins.owl build/upper.ttl \
 	 --version-iri $(BASE)/$(TODAY)/$@  --output $@ && \
 	sed -i .bak 's/$(NCBIT)/$(IEDB)/g' $@ && \
 	rm -f $@.bak
+
+.PRECIOUS: molecule-tree.owl
+molecule-tree.owl: protein-tree.owl $(NP_TREE)
+	robot merge --input $< --input $(word 2,$^) \
+	annotate --ontology-iri $(BASE)/$@\
+	 --version-iri $(BASE)/$(TODAY)/$@ --output $@
 
 clean: protein-tree.owl
 	rm -rf build
@@ -68,6 +75,9 @@ $(SUB_TREE): | init
 
 $(ORG_TREE): | init
 	curl -Lk https://10.0.7.92/organisms/latest/build/organism-tree.owl > $@
+
+$(NP_TREE): | init
+	curl -Lk https://10.0.7.92/arborist/results/non-peptide-tree.owl > $@
 
 # ----------------------------------------
 # INTERMEDIATES
