@@ -1,0 +1,21 @@
+PREFIX obo: <http://purl.obolibrary.org/obo/>
+PREFIX owl: <http://www.w3.org/2002/07/owl#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX iedb: <http://iedb.org/>
+
+CONSTRUCT {
+	obo:PRO_000000001 a owl:Class ;
+				  rdfs:subClassOf obo:BFO_0000040 ;
+				  rdfs:label "protein" ;
+				  iedb:has-taxonomic-level ":upper" .
+	obo:BFO_0000040 a owl:Class ;
+				rdfs:label "material entity" ;
+				iedb:has-taxonomic-level ":upper" ;
+				iedb:has-taxon-id "1" ;
+				obo:NCBITaxon_browser_link "http://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=1" .
+	?s rdfs:subClassOf obo:PRO_000000001 .
+}
+WHERE {
+	?s a owl:Class .
+	FILTER NOT EXISTS { ?s rdfs:subClassOf ?x }
+}

@@ -1,0 +1,7 @@
+PREFIX owl: <http://www.w3.org/2002/07/owl#>
+
+SELECT ?cls WHERE {
+	?s a owl:Class .
+	FILTER(STRSTARTS(str(?s), "http://purl.obolibrary.org/obo/NCBITaxon"))
+	BIND(str(?s) AS ?cls)
+}
