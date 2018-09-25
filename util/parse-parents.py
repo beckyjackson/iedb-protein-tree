@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import csv
+import sys
 
 # files to use
 parents = "dependencies/parent-proteins.csv"
@@ -53,49 +54,80 @@ ttl_template_full = """
 	iedb:has-source-database \"{5}\" .
 """
 
-lines = []
-with open(parents, mode='r') as f:
-	reader = csv.DictReader(f, delimiter=',')
-	# skip headers
-	next(reader)
-	# use rows to create ttl
-	for row in reader:
-		# create an IRI from Accession and Database cells
-		database = row["Database"]
-		id_num = row["Accession"]
-		if database == "GenPept":
-			iri = genpept.format(id_num)
-		elif database == "UniProt":
-			iri = uniprot.format(id_num)
-		else:
-			print "Unknown database: {0}".format(database)
-			continue
-		# build a class
-		label = row["Title"]
-		synonym = row["Name"]
-		# assign 'protein' parent for missing parents
-		if row["Proteome ID"] == "":
-			parent = "http://purl.obolibrary.org/obo/PRO_000000001"
-		else:
-			parent = "http://purl.obolibrary.org/obo/NCBITaxon_{0}".format(
-				row["Proteome ID"])
-		if label == "":
-			# missing label, check if there is a synonym
-			if synonym == "":
-				ttl = ttl_template_lite.format(iri, parent, id_num, database)
-			else:
-				ttl = ttl_template.format(iri, parent, synonym, id_num, database)
-		elif synonym == "":
-			# only label, no synonym
-			ttl = ttl_template.format(iri, parent, label, id_num, database)
-		else:
-			# all fields present
-			ttl = ttl_template_full.format(
-				iri, parent, label, synonym, id_num, database)
-		lines.append(ttl)
+def main(args):
+	in_file = args[1]
+	out_file = args[2]
+	lines = []
+	with open(in_file, mode='r') as f:
+		reader = csv.DictReader(f, delimiter='\t')
+		# skip headers
+		next(reader)
+		# use rows to create ttl
+		for row in reader:
+			lines.append(parse_row(row))
+	# write to file
+	with open(out_file, 'w') as f:
+		f.write(ttl_header)
+		for l in lines:
+			f.write(l)
 
-# write to file
-with open(ttl_out, 'w') as f:
-	f.write(ttl_header)
-	for l in lines:
-		f.write(l)
+def parse_row(row):
+	# create an IRI from Accession and Database cells
+	database = row["Database"]
+	id_num = row["Accession"]
+	iri = format_iri(database, id_num)
+	if iri is None:
+		return ""
+	# build a class
+	label = format_label(row["Title"])
+	synonym = format_synonym(row["Name"])
+	parent = format_parent(row["Proteome Label"])
+	if label == "":
+		# missing label, check if there is a synonym
+		if synonym == "":
+			return ttl_template_lite.format(iri, parent, id_num, database)
+		else:
+			return ttl_template.format(iri, parent, synonym, id_num, database)
+	elif synonym == "":
+		# only label, no synonym
+		return ttl_template.format(iri, parent, label, id_num, database)
+	else:
+		# all fields present
+		return ttl_template_full.format(
+			iri, parent, label, synonym, id_num, database)
+
+def format_iri(database, id_num):
+	if database == "GenPept":
+		return genpept.format(id_num)
+	elif database == "UniProt":
+		return uniprot.format(id_num)
+	else:
+		print "Unknown database: {0}".format(database)
+		return None
+
+def format_label(title):
+	if title == "":
+		return ""
+	words = title.split(" ")
+	label_words = []
+	for w in words:
+		if '|' in w:
+			continue
+		if '=' in w:
+			break
+		label_words.append(w)
+	return " ".join(label_words)
+
+def format_parent(proteome):
+	if proteome == "":
+		return "http://purl.obolibrary.org/obo/PRO_000000001"
+	parent_id = proteome.split('-')[0]
+	return "http://purl.obolibrary.org/obo/NCBITaxon_{0}".format(parent_id)
+
+def format_synonym(name):
+	if name == "":
+		return ""
+	return name.split('|')[-1]
+
+if __name__ == '__main__':
+	main(sys.argv)

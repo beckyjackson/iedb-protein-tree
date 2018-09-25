@@ -21,13 +21,20 @@ IEDB = http:\/\/iedb\.org\/taxon-protein\/
 ORG_TREE = dependencies/organism-tree.owl
 SUB_TREE = dependencies/subspecies-tree.owl
 NP_TREE = dependencies/non-peptide-tree.owl
-PROTEIN_TABLE = dependencies/parent-proteins.csv
+PROTEIN_TABLE = dependencies/parent-proteins.tsv
 
 # ----------------------------------------
 # PROTEIN TREE
 # ----------------------------------------
 
-all: protein-tree.owl molecule-tree.owl clean
+all: protein-tree.owl.gz molecule-tree.owl.gz clean
+
+# compress files at the end
+protein-tree.owl.gz: protein-tree.owl | molecule-tree.owl
+	gzip $<
+
+molecule-tree.owl.gz: molecule-tree.owl
+	gzip $<
 
 # The protein tree is a product of:
 # - taxon-proteins: NCBITaxon classes as proteins
@@ -49,7 +56,7 @@ molecule-tree.owl: protein-tree.owl $(NP_TREE)
 	annotate --ontology-iri $(BASE)/$@\
 	 --version-iri $(BASE)/$(TODAY)/$@ --output $@
 
-clean: protein-tree.owl
+clean: protein-tree.owl.gz molecule-tree.owl.gz
 	rm -rf build
 
 # only use this to reset the dependencies
@@ -64,11 +71,7 @@ init: build dependencies
 build dependencies:
 	mkdir -p $@
 
-$(PROTEIN_TABLE): | init
-	curl -LkO https://10.0.7.92/arborist/results/parent-proteins.csv.zip && \
-	unzip parent-proteins.csv.zip && \
-	mv results/parent-proteins.csv $@ && \
-	rm -rf results parent-proteins.csv.zip
+#$(PROTEIN_TABLE): | init
 
 $(SUB_TREE): | init
 	curl -Lk https://10.0.7.92/organisms/latest/build/subspecies-tree.owl > $@
@@ -99,7 +102,7 @@ build/upper.ttl: build/organism-proteins.ttl
 # links the proteins to their organisms
 .INTERMEDIATE: build/iedb-proteins.ttl
 build/iedb-proteins.ttl: $(PROTEIN_TABLE)| init
-	python util/parse-parents.py
+	python util/parse-parents.py $< $@
 
 # get a list of the NCBITaxon classes used by IEDB proteins as Proteome IDs
 .INTERMEDIATE: build/ncbi-classes.tsv
