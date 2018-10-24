@@ -2,7 +2,6 @@
 # Make configuration
 # ----------------------------------------
 
-MAKEFLAGS += --warn-undefined-variables
 SHELL := bash
 .SHELLFLAGS := -eu -o pipefail -c
 .DEFAULT_GOAL := all
@@ -12,6 +11,8 @@ SHELL := bash
 
 TODAY = $(shell date +%Y-%m-%d)
 BASE = https://ontology.iedb.org/ontology
+
+ROBOT = java $(ROBOT_JAVA_ARGS) -jar util/robot.jar
 
 # IRI bases
 NCBIT = http:\/\/purl\.obolibrary\.org\/obo\/NCBITaxon_
@@ -46,9 +47,11 @@ molecule-tree.owl.gz: molecule-tree.owl
 .PRECIOUS: protein-tree.owl
 protein-tree.owl: temp/taxon-proteins.owl temp/upper.ttl \
  temp/iedb-proteins.ttl
-	robot merge --input $< --input $(word 2,$^) --input $(word 3,$^) \
-	query --update util/fix-species.ru \
-	annotate --ontology-iri $(BASE)/$@\
+	$(ROBOT) merge --input $< --input $(word 2,$^)\
+	 --input $(word 3,$^) --output temp/protein-tree.ttl && \
+	$(ROBOT) query --input temp/protein-tree.ttl --tdb true\
+	 --update util/fix-species.ru --output temp/protein-tree.ttl && \
+	$(ROBOT) annotate --input temp/protein-tree.ttl --ontology-iri $(BASE)/$@\
 	 --version-iri $(BASE)/$(TODAY)/$@  --output $@ && \
 	sed -i .bak 's/$(NCBIT)/$(IEDB)/g' $@ && \
 	sed -i .bak 's/$(BAD_IEDB)/$(IEDB)/g' $@ && \
@@ -56,7 +59,7 @@ protein-tree.owl: temp/taxon-proteins.owl temp/upper.ttl \
 
 .PRECIOUS: molecule-tree.owl
 molecule-tree.owl: protein-tree.owl $(NP_TREE)
-	robot merge --input $< --input $(word 2,$^) \
+	$(ROBOT) merge --input $< --input $(word 2,$^) \
 	annotate --ontology-iri $(BASE)/$@\
 	 --version-iri $(BASE)/$(TODAY)/$@ --output $@
 
@@ -87,39 +90,40 @@ build/branches/vertebrate-branches.owl.gz \
 build/branches/virus-branches.owl.gz
 
 .PRECIOUS: build/branches/archeobacterium-branches.owl.gz
-build/branches/archeobacterium-branches.owl.gz: build/archeobacterium #| process-species
-	$(eval INPUTS := $(foreach I,$(shell ls $<), --input $</$(I)/branch.ttl))
-	robot merge $(INPUTS) --output $@
+build/branches/archeobacterium-branches.owl.gz: build/archeobacterium | process-species build/branches
+	$(eval INPUTS := $(foreach I,$(shell ls $</*/branch.ttl), --input $(I)))
+	$(ROBOT) merge $(INPUTS) --output $@
 
 .PRECIOUS: build/branches/bacterium-branches.owl.gz
-build/branches/bacterium-branches.owl.gz: build/bacterium #| process-species
-	$(eval INPUTS := $(foreach I,$(shell ls $<), --input $</$(I)/branch.ttl))
-	robot merge $(INPUTS) --output $@
+build/branches/bacterium-branches.owl.gz: build/bacterium | process-species build/branches
+	$(eval INPUTS := $(foreach I,$(shell ls $</*/branch.ttl), --input $(I)))
+	$(ROBOT) merge $(INPUTS) --output $@
 
 .PRECIOUS: build/branches/other-eukaryote-branches.owl.gz
-build/branches/other-eukaryote-branches.owl.gz: build/other-eukaryote #| process-species
-	$(eval INPUTS := $(foreach I,$(shell ls $<), --input $</$(I)/branch.ttl))
-	robot merge $(INPUTS) --output $@
+build/branches/other-eukaryote-branches.owl.gz: build/other-eukaryote | process-species build/branches
+	$(eval INPUTS := $(foreach I,$(shell ls $</*/branch.ttl), --input $(I)))
+	$(ROBOT) merge $(INPUTS) --output $@
 
 .PRECIOUS: build/branches/plant-branches.owl.gz
-build/branches/plant-branches.owl.gz: build/plant #| process-species
-	$(eval INPUTS := $(foreach I,$(shell ls $<), --input $</$(I)/branch.ttl))
-	robot merge $(INPUTS) --output $@
+build/branches/plant-branches.owl.gz: build/plant | process-species build/branches
+	$(eval INPUTS := $(foreach I,$(shell ls $</*/branch.ttl), --input $(I)))
+	$(ROBOT) merge $(INPUTS) --output $@
 
 .PRECIOUS: build/branches/vertebrate-branches.owl.gz
-build/branches/vertebrate-branches.owl.gz: build/vertebrate #| process-species
-	$(eval INPUTS := $(foreach I,$(shell ls $<), --input $</$(I)/branch.ttl))
-	robot merge $(INPUTS) --output $@
+build/branches/vertebrate-branches.owl.gz: build/vertebrate | process-species build/branches
+	$(eval INPUTS := $(foreach I,$(shell ls $</*/branch.ttl), --input $(I)))
+	$(ROBOT) merge $(INPUTS) --output $@
 
 .PRECIOUS: build/branches/virus-branches.owl.gz
-build/branches/virus-branches.owl.gz: build/virus #| process-species
-	
-	robot merge $(INPUTS) --output $@
+build/branches/virus-branches.owl.gz: build/virus | process-species build/branches
+	$(eval INPUTS := $(foreach I,$(shell ls $</*/branch.ttl), --input $(I)))
+	$(ROBOT) merge $(INPUTS) --output $@
 
 .PRECIOUS: build/branches.owl.gz
-build/branches.owl.gz: build/branches
+build/branches.owl.gz: build/branches | $(BRANCHES)
 	$(eval INPUTS := $(foreach I,$(shell ls $<), --input $</$(I)))
-	robot merge $(INPUTS) --output $@
+	$(eval ROBOT_JAVA_ARTS=-Xmx4G)
+	$(ROBOT) merge $(INPUTS) --output $@
 
 # ----------------------------------------
 # DEPENDENCIES
@@ -159,14 +163,15 @@ $(PROTEOME_TABLE): $(PROTEIN_TABLE) $(ACTIVE_TABLE)
 # organism-proteins file contains 'protein' classes from organism tree
 .INTERMEDIATE: temp/organism-proteins.ttl
 temp/organism-proteins.ttl: $(ORG_TREE) | temp
-	robot filter --input $< --term OBI:0100026\
+	$(ROBOT) filter --input $< --term OBI:0100026\
 	 --select "descendants annotations" \
-	query --update util/rename.ru --output $@
+	query --update util/rename.ru \
+	remove --term oboInOwl:hasLabelSource --trim true --output $@
 
 # upper file is just top-level structure for the protein tree
 .INTERMEDIATE: temp/upper.ttl
 temp/upper.ttl: temp/organism-proteins.ttl
-	robot query --input $< --query util/construct-upper.rq $@
+	$(ROBOT) query --input $< --query util/construct-upper.rq $@
 
 # IEDB proteins created from parent-proteins table
 # links the proteins to their organisms
@@ -175,9 +180,10 @@ temp/iedb-proteins.ttl: $(PROTEIN_TABLE)| temp
 	python util/parse-parents.py $< $@
 
 # get a list of the NCBITaxon classes used by IEDB proteins as Proteome IDs
+# use TDB on disk to speed up processing
 .INTERMEDIATE: temp/ncbi-classes.tsv
 temp/ncbi-classes.tsv: temp/iedb-proteins.ttl
-	robot query --input $< --query util/ncbi-classes.rq $@
+	$(ROBOT) query --input $< --tdb true --query util/ncbi-classes.rq $@
 
 # the following targets are used to fill in gaps between the organism-tree
 # level proteins and the proteins used in the IEDB.
@@ -185,7 +191,7 @@ temp/ncbi-classes.tsv: temp/iedb-proteins.ttl
 # get a list of NCBITaxon classes already in organism-based tree
 .INTERMEDIATE: temp/included-classes.tsv
 temp/included-classes.tsv: temp/organism-proteins.ttl
-	robot query --input $< --query util/included-classes.rq $@
+	$(ROBOT) query --input $< --query util/included-classes.rq $@
 
 # create a list of classes MISSING from organism-based tree
 .INTERMEDIATE: temp/missing-classes.txt
@@ -196,7 +202,7 @@ temp/missing-classes.txt: temp/included-classes.tsv temp/ncbi-classes.tsv
 .INTERMEDIATE: temp/taxon-proteins.owl
 temp/taxon-proteins.owl: $(SUB_TREE) temp/missing-classes.txt \
  temp/organism-proteins.ttl
-	robot filter --input $< --term-file $(word 2,$^)\
+	$(ROBOT) filter --input $< --term-file $(word 2,$^)\
 	 --term rdfs:subClassOf --select "self ancestors annotations" \
 	remove --term NCBITaxon:1 --term OBI:0100026 --term NCBITaxon:28384\
 	 --term NCBITaxon:32644 --trim true \
