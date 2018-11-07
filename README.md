@@ -31,7 +31,7 @@ make all
 
 ### Protein and Molecule Trees
 
-The process generates the protein tree from various tabular inputs and merges with the legacy non-peptide tree to create the molecule tree. The necessary dependencies that **must be manually updated** are:
+The process generates the protein tree from various tabular inputs and merges with the legacy non-peptide tree to create the molecule tree. The necessary dependencies that **must be manually added** are:
 
 * `dependencies/parent_protein.tsv` assignments of proteins referenced in the IEDB and their parent proteomes
 * `dependencies/source_parent.tsv` assignments of all sources to reference proteins from the reference proteomes
