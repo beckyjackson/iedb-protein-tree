@@ -1,7 +1,7 @@
 # IEDB Protein Tree
 
-James A. Overton [james@overton.ca]
-Rebecca Tauber [rctauber@gmail.com]
+James A. Overton [james@overton.ca](mailto:james@overton.ca)
+Rebecca Tauber [rctauber@gmail.com](mailto:rctauber@gmail.com)
 
 The IEDB Molecule Finder includes all species and ancestors from the organism tree, plus proteins from their reference proteomes.
 
