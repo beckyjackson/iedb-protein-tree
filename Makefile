@@ -29,17 +29,15 @@ ACTIVE_TABLE = dependencies/active-species.tsv
 PROTEOME_TABLE = dependencies/proteomes.tsv
 SOURCE_TABLE = dependencies/source_parent.tsv
 
-all: protein-tree.owl.gz molecule-tree.owl.gz clean #branches
+all: trees branches
+
+trees: protein-tree.owl.gz molecule-tree.owl.gz
 
 # ----------------------------------------
 # PROTEIN TREE
 # ----------------------------------------
 
-# compress files at the end
-protein-tree.owl.gz: protein-tree.owl | molecule-tree.owl
-	gzip $<
-
-molecule-tree.owl.gz: molecule-tree.owl
+protein-tree.owl.gz: protein-tree.owl
 	gzip $<
 
 # The protein tree is a product of:
@@ -52,20 +50,17 @@ molecule-tree.owl.gz: molecule-tree.owl
 protein-tree.owl: temp/merged.owl
 	python util/fix-duplicate-labels.py $< $@
 
-.PRECIOUS: molecule-tree.owl
-molecule-tree.owl: protein-tree.owl $(NP_TREE)
+.PRECIOUS: molecule-tree.owl.gz
+molecule-tree.owl.gz: protein-tree.owl.gz $(NP_TREE)
 	$(ROBOT) merge --input $< --input $(word 2,$^) \
 	annotate --ontology-iri $(BASE)/$@\
 	 --version-iri $(BASE)/$(TODAY)/$@ --output $@
-
-clean: protein-tree.owl.gz molecule-tree.owl.gz
-	rm -rf temp
 
 # ----------------------------------------
 # PROTEOME BRANCHES
 # ----------------------------------------
 
-branches: build/branches.owl.gz
+branches: branches.owl.gz
 
 # create a dir for each species containing:
 # - FASTA and RDF proteome files from UniProt
@@ -142,8 +137,8 @@ dependencies:
 # manually retrieve
 #$(PROTEIN_TABLE): | dependencies
 
-$(ACTIVE_TABLE): | dependencies
-	curl -Lk https://10.0.7.92/organisms/latest/temp/active-species.tsv > $@
+#$(ACTIVE_TABLE): | dependencies
+#	curl -Lk https://10.0.7.92/organisms/latest/temp/active-species.tsv > $@
 
 $(SUB_TREE): | dependencies
 	curl -Lk https://10.0.7.92/organisms/latest/temp/subspecies-tree.owl > $@
