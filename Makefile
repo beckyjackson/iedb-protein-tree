@@ -116,7 +116,7 @@ clean: protein-tree.owl.gz molecule-tree.owl.gz
 # ----------------------------------------
 
 # Using the active proteins table, update the branches for each changed species
-process-species: $(ACTIVE_PROTEINS) $(PROTEOMES) $(SOURCES) | build build/branches
+process-species: $(ACTIVE_PROTEINS) $(PROTEOMES) | build build/branches
 	$(SCRIPTS)/update-branches.py $^
 
 # Merge all archeobacterium branches

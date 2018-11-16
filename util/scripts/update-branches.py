@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
 
-import atexit, csv, gzip, os, rdflib, shutil, sys, subprocess, urllib.request
-from rdflib import URIRef, BNode, Literal, RDF, RDFS, XSD, OWL
+import atexit, csv, gzip, os, shutil, sys, subprocess, urllib.request
 
 def main(args):
-	'''Usage:
-	update-branches.py <active_proteins> <proteomes> <source_parents>'''
+	'''Usage: update-branches.py <active_proteins> <proteomes>'''
 	global active_proteins, proteome_id_map, progress, complete, \
 	remaining, query_template, proteomes, synonym_map
 
 	active_proteins_file = args[1]
 	proteomes_file = args[2]
-	source_parents_file = args[3]
 
 	proteome_id_map = {}
 	active_proteins = get_active_proteins(active_proteins_file)
@@ -22,11 +19,7 @@ def main(args):
 	if proteomes is None:
 		print('Could not parse proteomes')
 		return
-	query_template = get_query_template('util/build-branch.rq')
-	synonym_map = get_synonyms(source_parents_file)
-	if synonym_map is None:
-		print('Could not parse source parents')
-		return
+	query_template = get_query_template('util/queries/build-branch.rq')
 
 	total = len(proteomes.keys())
 	complete = 0
@@ -46,14 +39,15 @@ def main(args):
 def process_species(species_key):
 	'''Process a species from proteomes.tsv. First, fetch the proteome files 
 	from UniProt. Then, generate a TTL file representing the species branch. 
-	Also generate a set of protein synonyms and merge this into the branch. 
 	Finally, filter the branch proteins to only include active proteins in the 
 	IEDB.'''
 	global active_proteins, proteomes
 
+	# skip if the species key does not have a proteome ID
 	if not species_key in proteomes:
 		errors.append("MISSING: %s" % species_key)
 		return
+	# put this species branch in its group directory
 	group = proteomes[species_key]['Group']
 	group_dir = 'build/%s' % (group)
 	if not os.path.exists(group_dir):
@@ -61,20 +55,22 @@ def process_species(species_key):
 	build_dir = '%s/%s' % (group_dir, species_key)
 	if not os.path.exists(build_dir):
 		os.mkdir(build_dir)
+	# download the proteome
 	result = fetch_proteome(species_key, build_dir)
 	if not result:
+		# skip if the proteome could not be downloaded
 		errors.append("Could not download proteome for %s" % species_key)
 		return
 
+	# get the active proteins for this species
 	species_id = species_key.split('-')[0]
 	species_proteins = active_proteins[species_id]
 
+	# build the branch
 	result = generate_branch(species_key, build_dir)
 	if not result:
 		return
-	#result = generate_synonyms(species_key, build_dir)
-	#if result:
-		#merge_branch_synonyms(species_key, build_dir)
+	# trim non-active proteins from the branch
 	trim_branch(species_key, build_dir, species_proteins)
 
 def fetch_proteome(species_key, build_dir):
@@ -117,7 +113,7 @@ def generate_branch(species_key, build_dir):
 					shutil.copyfileobj(f_in, f_out)
 	except Exception as e:
 		errors.append(
-			'Unable to unzip proteome for %s\nCAUSE: %s' % (species_key, e))
+			'Unable to unzip proteome for %s\n\tCAUSE: %s' % (species_key, e))
 		return False
 
 	# if the unzipped file is empty, it does not exist
@@ -150,7 +146,7 @@ def generate_branch(species_key, build_dir):
 			subprocess.check_call(cmd, shell=True)
 	except Exception as e:
 		errors.append(
-			'Unable to construct branch for %s\nCAUSE: %s' % (species_key, e))
+			'Unable to construct branch for %s\n\tCAUSE: %s' % (species_key, e))
 		os.remove(proteome_file)
 		return False
 
@@ -175,123 +171,6 @@ def generate_branch(species_key, build_dir):
 		return False
 	return True
 
-def generate_synonyms(species_key, build_dir):
-	'''Add protein synonyms from the source_parent table to the branch. This 
-	constructs a 'synonyms.ttl' file for the branch, which is merged into the 
-	branch.ttl file.'''
-	global synonym_map
-
-	if species_key not in synonym_map:
-		return True
-
-	out_file = '%s/synonyms.ttl' % build_dir
-	# skip if exists
-	if os.path.exists(out_file):
-		return True
-
-	gout = rdflib.Graph()
-	gout.bind('owl', owl)
-	gout.bind('obo', obo)
-	gout.bind('iedb', iedb)
-
-	proteins = synonym_map[species_key]
-	for iri,synonyms in proteins.items():
-		if 'other' in iri:
-			try:
-				add_other_protein_node(gout, iri, species_key, synonyms)
-			except Exception as e:
-				errors.append(
-					'Unable to add "other protein" node for %s\nCAUSE: %s' 
-					% (species_key, e))
-		else:
-			for s in synonyms:
-				# add declaration
-				gout.add((URIRef(iri), 
-					URIRef(rdf + 'type'), 
-					URIRef(owl + 'Class')))
-				# add synonym
-				gout.add((URIRef(iri), 
-					URIRef(iedb + 'protein-synonym'), 
-					Literal(s, datatype=XSD.string)))
-
-	with open(out_file, 'wb') as f:
-		gout.serialize(f, format='ttl')
-
-	if not os.path.exists(out_file):
-		return False
-	return True
-
-def add_other_protein_node(gout, other_id, species_key, synonyms):
-	'''For proteins that do not have UniProt parents, add an 'Other X protein' 
-	node and assert those as children.'''
-	# create the "Other X protein" parent class
-	parent_species = proteomes[species_key]['Species Label']
-	label = 'Other %s protein' % parent_species
-	species_id = iedb + 'taxon-protein/' + proteome['Species ID']
-	# add subclass statement
-	gout.add((URIRef(other_id), 
-		URIRef(rdfs + 'subClassOf'), 
-		URIRef(species_id)))
-	# add label
-	gout.add((URIRef(other_id), 
-		URIRef(rdfs + 'label'), 
-		Literal(label, datatype=XSD.string)))
-	for s in synonyms:
-		attrs = s.split('|')
-		sid = attrs[0]
-		label = attrs[1]
-		database = attrs[2]
-		accession = attrs[3]
-		iri = iedb + 'source/' + sid
-		# create accession IRI based on source DB
-		if source == 'GenPept':
-			accession_iri = 'https://www.ncbi.nlm.nih.gov/protein/' \
-				+ accession
-		elif source == 'UniProt':
-			accession_iri = 'https://www.uniprot.org/uniprot/' + accession
-		else:
-			errors.append('Unknown source for "%s": %s' % (label, source))
-			continue
-		# add subclass statement
-		gout.add((URIRef(iri), URIRef(rdfs + 'subClassOf'), URIRef(other_id)))
-		# add label
-		gout.add((URIRef(iri), 
-			URIRef(rdfs + 'label'), 
-			Literal(label, datatype=XSD.string)))
-		# add accession
-		gout.add((URIRef(iri), 
-			URIRef(iedb + 'has-accession'), 
-			Literal(accession, datatype=XSD.string)))
-		# add accession IRI
-		gout.add((URIRef(iri), 
-			URIRef(iedb + 'has-accession-iri'), 
-			URIRef(accession_iri)))
-		# add source DB
-		gout.add((URIRef(iri), 
-			URIRef(iedb + 'has-source-database'), 
-			Literal(source, datatype=XSD.string)))
-		# add source ID
-		gout.add((URIRef(iri), 
-			URIRef(iedb + 'has-source-id'), 
-			Literal(sid, datatype=XSD.string)))
-
-def merge_branch_synonyms(species_key, build_dir):
-	'''Merge the base branch.ttl file with the synonyms.ttl file.'''
-	# synonyms will not exist if the species isn't in the map
-	if species_key not in synonym_map:
-		return
-
-	cmd = merge_cmd.format(build_dir)
-	try:
-		code = subprocess.call(cmd, shell=True)
-		if code is not 0:
-			# retry and throw error if not 0
-			subprocess.check_call(cmd, shell=True)
-	except Exception as e:
-		errors.append(
-			'Unable to merge synonyms for %s\nCAUSE: %s' % (species_key, e))
-		return
-
 def trim_branch(species_key, build_dir, proteins):
 	'''Filter the branch.ttl file to include only active proteins.'''
 	active_proteins = '%s/active-proteins.txt' % build_dir
@@ -306,7 +185,7 @@ def trim_branch(species_key, build_dir, proteins):
 			subprocess.check_call(cmd, shell=True)
 	except Exception as e:
 		errors.append(
-			'Unable to trim branch for %s\nCAUSE: %s' % (species_key, e))
+			'Unable to trim branch for %s\n\tCAUSE: %s' % (species_key, e))
 		return
 	#os.remove(active_proteins)
 
@@ -373,69 +252,12 @@ def get_active_proteins(active_proteins_table):
 			active_proteins[species_id] = proteins
 	return active_proteins
 
-def get_synonyms(source_parents_file):
-	'''Generate a map of species ID -> proteins and synonyms based on the 
-	source-parents table.'''
-	global proteome_id_map, update_species
-
-	if '.tsv' in source_parents_file:
-		delim = '\t'
-	elif '.csv' in source_parents_file:
-		delim = ','
-	else:
-		print('Cannot parse file "%s" (unknown format)' % source_parents_file)
-		return None
-
-	synonym_map = {}
-	with open(source_parents_file, 'r') as f:
-		reader = csv.DictReader(f, delimiter=delim)
-		for row in reader:
-			species = row['Proteome Label'].strip()
-			protein = row['Parent IRI'].strip()
-			# convert HTTPS to HTTP
-			if 'https' in protein:
-				protein = protein.replace('https', 'http')
-			protein_synonym = row['Name'].strip()
-
-			if 'other' in protein:
-				other_id = protein.split('/')[4].split('-')[0]
-				if other_id not in proteome_id_map:
-					continue
-				species = proteome_id_map[other_id]
-			
-			if species in synonym_map:
-				proteins = synonym_map[species]
-			else:
-				proteins = {}
-			if protein in proteins:
-				synonyms = proteins[protein]
-			else:
-				synonyms = []
-
-			if 'other' in protein:
-				protein_synonym = '%s|%s|%s|%s' % \
-					(row['Source ID'], 
-				     protein_synonym, 
-					 row['Database'], 
-					 row['Accession'])
-
-			synonyms.append(protein_synonym)
-			proteins[protein] = synonyms
-			synonym_map[species] = proteins
-
-	return synonym_map
-
 # Track all errors
 errors = []
 
-# Namespaces
+# UniProt reference proteome download
 uniprot = 'http://www.uniprot.org/uniprot/?query=proteome:%s\
 &compress=yes&force=true&format=%s'
-obo = 'http://purl.obolibrary.org/obo/'
-iedb = 'http://iedb.org/'
-rdfs = 'http://www.w3.org/2000/01/rdf-schema#'
-rdf = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#'
-owl = 'http://www.w3.org/2002/07/owl#'
 
 # ROBOT commands
 query_cmd = 'java -Xmx8G -jar util/robot.jar query \
@@ -448,64 +270,13 @@ filter_cmd = 'java -Xmx8G -jar util/robot.jar \
  --input {0}/branch.ttl --term-file {0}/active-proteins.txt \
  --select "self ancestors descendants annotations" --output {0}/branch.ttl'
 
- # Queries
-annotation_synonyms_query = """
-SELECT *
-WHERE {
-  ?protein
-    uc:annotation ?annotation ;
-    uc:component ?component .
-  ?annotation
-    rdfs:comment ?fullName .
-  ?component
-    uc:recommendedName / uc:fullName ?fullName .
-  OPTIONAL {
-    ?component uc:recommendedName / uc:shortName ?synonym .
-  }
-  OPTIONAL {
-    ?component uc:alternativeName / (uc:fullName | uc:shortName) ?synonym .
-  }
-}"""
-annotations_query = """
-SELECT *
-WHERE {
-	VALUES ?type { uc:Chain_Annotation uc:Propeptide_Annotation }
-	?annotation
-		^uc:annotation ?protein ;
-		rdf:type ?type ;
-		rdfs:comment ?name ;
-		uc:range / faldo:begin / faldo:position ?begin ;
-		uc:range / faldo:end / faldo:position ?end .
-	?protein
-		uc:sequence / rdf:value ?sequence .
-}
-ORDER BY ?begin ?end"""
-proteins_query = """
-SELECT *
-WHERE {
-	?protein
-		a uc:Protein ;
-		uc:recommendedName / uc:fullName ?name ;
-		uc:reviewed ?reviewed ;
-		uc:sequence / rdf:value ?sequence .
-}"""
-protein_synonyms_query = """
-SELECT DISTINCT *
-WHERE {
-	?protein
-		a uc:Protein ;
-		uc:component /
-		 (uc:recommendedName | uc:alternativeName ) /
-		 (uc:fullName | uc:shortName) ?name .
-}"""
-
 # Setting for large tables
 csv.field_size_limit(sys.maxsize)
 
 def on_exit():
 	'''Write any errors on exit.'''
 	if len(errors) > 0:
-		with open('errors.txt', 'w') as f:
+		with open('update-branches-errors.txt', 'w') as f:
 			for e in errors:
 				f.write(e + '\n')
 	print('%d errors' % len(errors))
