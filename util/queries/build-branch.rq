@@ -1,0 +1,51 @@
+PREFIX faldo: <http://biohackathon.org/resource/faldo#>
+PREFIX iedb: <http://iedb.org/>
+PREFIX obo: <http://purl.obolibrary.org/obo/>
+PREFIX owl: <http://www.w3.org/2002/07/owl#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX uc: <http://purl.uniprot.org/core/>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+PREFIX UniProt: <http://purl.uniprot.org/uniprot/>
+
+CONSTRUCT {
+	?taxonProtein a owl:Class ;
+			rdfs:label ?taxonLabel ;
+			iedb:has-taxon-id ?taxonID ;
+			iedb:has-taxonomic-level ?taxonLevel ;
+			iedb:has-taxonomic-rank ?taxonRank ;
+			obo:NCBITaxon_browser_link ?browser .
+	?protein a owl:Class ;
+			 rdfs:subClassOf ?taxonProtein ;
+			 rdfs:label ?proteinName ;
+			 iedb:has-accession ?accession ;
+			 iedb:has-accession-iri ?protein ;
+			 iedb:has-category "uniprot-reviewed-protein"^^xsd:string ;
+			 iedb:has-source-database "UniProt"^^xsd:string ;
+			 iedb:is-reviewed ?reviewed .
+	?annotation a owl:Class ;
+				rdfs:subClassOf ?protein ;
+				rdfs:label ?annotationLabel ;
+				iedb:has-category "protein feature"^^xsd:string ;
+				iedb:has-start-position ?begin ;
+				iedb:has-end-position ?end .
+} WHERE {
+	?protein a uc:Protein ;
+			 uc:reviewed ?reviewed ;
+			 uc:sequence / rdf:value ?sequence .
+	OPTIONAL { ?protein uc:recommendedName / uc:fullName ?pName }
+	VALUES ?type { uc:Chain_Annotation uc:Propeptide_Annotation }
+	OPTIONAL { ?annotation ^uc:annotation ?protein ;
+						   rdf:type ?type ;
+						   rdfs:comment ?annotationName ;
+						   uc:range / faldo:begin / faldo:position ?begin ;
+						   uc:range / faldo:end / faldo:position ?end . }
+	BIND(REPLACE(STR(?protein), "http://purl.uniprot.org/uniprot/", "") AS ?accession)
+	BIND(CONCAT(STR(?annotationName), " (", STR(?begin), "-", STR(?end), ")") AS ?annotationLabel)
+	BIND(<http://iedb.org/taxon-protein/[TAXON_ID]> AS ?taxonProtein)
+	BIND("[TAXON_LABEL] protein" AS ?taxonLabel)
+	BIND("[TAXON_ID]" AS ?taxonID)
+	BIND(":species" AS ?taxonLevel)
+	BIND("species" AS ?taxonRank)
+	BIND("http://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=[TAXON_ID]" AS ?browser)
+}

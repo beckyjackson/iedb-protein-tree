@@ -24,14 +24,65 @@ BAD_IEDB = http:\/\/iedb\.org\/taxon\/
 ORG_TREE = dependencies/organism-tree.owl
 SUB_TREE = dependencies/subspecies-tree.owl
 NP_TREE = dependencies/non-peptide-tree.owl
-PROTEIN_TABLE = dependencies/parent_protein.tsv
-ACTIVE_TABLE = dependencies/active-species.tsv
-PROTEOME_TABLE = dependencies/proteomes.tsv
-SOURCE_TABLE = dependencies/source_parent.tsv
 
-all: trees branches
+# Other important files
+SOURCES = dependencies/source-parents.csv
+PROTEINS = dependencies/parent-proteins.csv
+PROTEOMES = dependencies/proteomes.tsv
+ACTIVE_PROTEINS = temp/active-proteins.csv
 
+# Directories
+SCRIPTS = util/scripts
+QUERIES = util/queries
+
+# 'clean' task removes temp files and zips the build files
+all: trees clean
 trees: protein-tree.owl.gz molecule-tree.owl.gz
+
+# THE STEPS
+
+# Get the species that need updating
+# - fix the parent-proteins table (to CSV)
+# - compare new parent-proteins with parent-proteins-last
+# - any species that has a new/removed/changed protein needs to be updated
+# - build a protein table with just the species & proteins we care about
+# For each species to update:
+# - get a list of the proteins we care about (active proteins)
+# - download the UniProt proteome files (RDF and FASTA)
+# - generate the branch from the RDF file
+# - filter for the top-level node + the active proteins
+# Merge ALL species in build to generate protein-tree
+# - add labels from parent-proteins
+# - add synonyms from source-parents
+# - fix duplicate labels & gzip
+# - generate molecule-tree
+# Clean up
+# - remove temp directory
+# - copy parent-proteins table -> parent-proteins-last & gzip
+
+build build/branches dependencies temp:
+	mkdir -p $@
+
+# If the parent-proteins-last file does not exist, create an empty one
+dependencies/parent-proteins-last.csv:
+	touch $@
+
+# If parent proteins is not given to us in CSV format,
+# convert the format and make sure the fields match what we want
+.PRECIOUS: $(PROTEINS)
+$(PROTEINS): dependencies/parent_protein.tsv
+	$(SCRIPTS)/convert-parent-proteins.py $< $@
+
+# Do the same with the source-parents table
+.PRECIOUS: $(SOURCES)
+$(SOURCES): dependencies/source_parent.tsv
+	$(SCRIPTS)/convert-source-parents.py $< $@
+
+# Create an "active proteins" table by comparing the 
+# last used parent-proteins table to the current one
+.INTERMEDIATE: $(ACTIVE_PROTEINS)
+$(ACTIVE_PROTEINS): $(PROTEINS) dependencies/parent-proteins-last.csv | temp
+	$(SCRIPTS)/get-active-proteins.py $@ $^
 
 # ----------------------------------------
 # PROTEIN TREE
@@ -48,7 +99,7 @@ protein-tree.owl.gz: protein-tree.owl
 # the last step is to append UniProt IDs to duplicate labels
 .PRECIOUS: protein-tree.owl
 protein-tree.owl: temp/merged.owl
-	python util/fix-duplicate-labels.py $< $@
+	$(SCRIPTS)/fix-duplicate-labels.py $< $@
 
 .PRECIOUS: molecule-tree.owl.gz
 molecule-tree.owl.gz: protein-tree.owl.gz $(NP_TREE)
@@ -56,21 +107,59 @@ molecule-tree.owl.gz: protein-tree.owl.gz $(NP_TREE)
 	annotate --ontology-iri $(BASE)/$@\
 	 --version-iri $(BASE)/$(TODAY)/$@ --output $@
 
+clean: protein-tree.owl.gz molecule-tree.owl.gz
+	rm -rf temp && \
+	cp $(PROTEINS) dependencies/parent-proteins-last.csv
+
 # ----------------------------------------
 # PROTEOME BRANCHES
 # ----------------------------------------
 
-branches: branches.owl.gz
+# Using the active proteins table, update the branches for each changed species
+process-species: $(ACTIVE_PROTEINS) $(PROTEOMES) $(SOURCES) | build build/branches
+	$(SCRIPTS)/update-branches.py $^
 
-# create a dir for each species containing:
-# - FASTA and RDF proteome files from UniProt
-# - A TTL representation of the proteome
-# - A parent-proteins table for the proteome
-process-species: $(PROTEOME_TABLE) | build build/branches
-	util/build-species-proteome.py $<
+# Merge all archeobacterium branches
+.PRECIOUS: build/branches/archeobacterium-branches.owl.gz
+build/branches/archeobacterium-branches.owl.gz: build/archeobacterium\
+ | process-species build/branches
+	$(eval INPUTS := $(foreach I,$(shell ls $</*/branch.ttl), --input $(I)))
+	$(ROBOT) merge $(INPUTS) --output $@
 
-build/branches:
-	mkdir -p $@
+# Merge all bacterium branches
+.PRECIOUS: build/branches/bacterium-branches.owl.gz
+build/branches/bacterium-branches.owl.gz: build/bacterium\
+ | process-species build/branches
+	$(eval INPUTS := $(foreach I,$(shell ls $</*/branch.ttl), --input $(I)))
+	$(ROBOT) merge $(INPUTS) --output $@
+
+# Merge all other-eukaryote branches
+.PRECIOUS: build/branches/other-eukaryote-branches.owl.gz
+build/branches/other-eukaryote-branches.owl.gz: build/other-eukaryote\
+ | process-species build/branches
+	$(eval INPUTS := $(foreach I,$(shell ls $</*/branch.ttl), --input $(I)))
+	$(ROBOT) merge $(INPUTS) --output $@
+
+# Merge all plant branches
+.PRECIOUS: build/branches/plant-branches.owl.gz
+build/branches/plant-branches.owl.gz: build/plant\
+ | process-species build/branches
+	$(eval INPUTS := $(foreach I,$(shell ls $</*/branch.ttl), --input $(I)))
+	$(ROBOT) merge $(INPUTS) --output $@
+
+# Merge all vertebrate branches
+.PRECIOUS: build/branches/vertebrate-branches.owl.gz
+build/branches/vertebrate-branches.owl.gz: build/vertebrate\
+ | process-species build/branches
+	$(eval INPUTS := $(foreach I,$(shell ls $</*/branch.ttl), --input $(I)))
+	$(ROBOT) merge $(INPUTS) --output $@
+
+# Merge all virus branches
+.PRECIOUS: build/branches/virus-branches.owl.gz
+build/branches/virus-branches.owl.gz: build/virus\
+ | process-species build/branches
+	$(eval INPUTS := $(foreach I,$(shell ls $</*/branch.ttl), --input $(I)))
+	$(ROBOT) merge $(INPUTS) --output $@
 
 BRANCHES = build/branches/archeobacterium-branches.owl.gz \
 build/branches/bacterium-branches.owl.gz \
@@ -79,66 +168,15 @@ build/branches/plant-branches.owl.gz \
 build/branches/vertebrate-branches.owl.gz \
 build/branches/virus-branches.owl.gz
 
-.PRECIOUS: build/branches/archeobacterium-branches.owl.gz
-build/branches/archeobacterium-branches.owl.gz: build/archeobacterium\
- | process-species build/branches
-	$(eval INPUTS := $(foreach I,$(shell ls $</*/branch.ttl), --input $(I)))
-	$(ROBOT) merge $(INPUTS) --output $@
-
-.PRECIOUS: build/branches/bacterium-branches.owl.gz
-build/branches/bacterium-branches.owl.gz: build/bacterium\
- | process-species build/branches
-	$(eval INPUTS := $(foreach I,$(shell ls $</*/branch.ttl), --input $(I)))
-	$(ROBOT) merge $(INPUTS) --output $@
-
-.PRECIOUS: build/branches/other-eukaryote-branches.owl.gz
-build/branches/other-eukaryote-branches.owl.gz: build/other-eukaryote\
- | process-species build/branches
-	$(eval INPUTS := $(foreach I,$(shell ls $</*/branch.ttl), --input $(I)))
-	$(ROBOT) merge $(INPUTS) --output $@
-
-.PRECIOUS: build/branches/plant-branches.owl.gz
-build/branches/plant-branches.owl.gz: build/plant\
- | process-species build/branches
-	$(eval INPUTS := $(foreach I,$(shell ls $</*/branch.ttl), --input $(I)))
-	$(ROBOT) merge $(INPUTS) --output $@
-
-.PRECIOUS: build/branches/vertebrate-branches.owl.gz
-build/branches/vertebrate-branches.owl.gz: build/vertebrate\
- | process-species build/branches
-	$(eval INPUTS := $(foreach I,$(shell ls $</*/branch.ttl), --input $(I)))
-	$(ROBOT) merge $(INPUTS) --output $@
-
-.PRECIOUS: build/branches/virus-branches.owl.gz
-build/branches/virus-branches.owl.gz: build/virus\
- | process-species build/branches
-	$(eval INPUTS := $(foreach I,$(shell ls $</*/branch.ttl), --input $(I)))
-	$(ROBOT) merge $(INPUTS) --output $@
-
+# Merge the top-level branches into a master file
 .PRECIOUS: build/branches.owl.gz
 build/branches.owl.gz: build/branches | $(BRANCHES)
 	$(eval INPUTS := $(foreach I,$(shell ls $<), --input $</$(I)))
-	$(eval ROBOT_JAVA_ARTS=-Xmx4G)
 	$(ROBOT) merge $(INPUTS) --output $@
 
 # ----------------------------------------
 # DEPENDENCIES
 # ----------------------------------------
-
-build:
-	mkdir -p $@
-
-temp:
-	mkdir -p $@
-
-dependencies:
-	mkdir -p $@
-
-# manually retrieve
-#$(PROTEIN_TABLE): | dependencies
-
-#$(ACTIVE_TABLE): | dependencies
-#	curl -Lk https://10.0.7.92/organisms/latest/temp/active-species.tsv > $@
 
 $(SUB_TREE): | dependencies
 	curl -Lk https://10.0.7.92/organisms/latest/temp/subspecies-tree.owl > $@
@@ -148,11 +186,6 @@ $(ORG_TREE): | dependencies
 
 $(NP_TREE): | dependencies
 	curl -Lk https://10.0.7.92/arborist/results/non-peptide-tree.owl > $@
-
-# manually retrieve
-# build a table to link species and proteome IDs
-#$(PROTEOME_TABLE): $(PROTEIN_TABLE) $(ACTIVE_TABLE)
-	#util/build-proteome-table.py $^ $@
 
 # ----------------------------------------
 # PROTEIN-TREE INTERMEDIATES
@@ -165,7 +198,7 @@ $(NP_TREE): | dependencies
 temp/organism-proteins.ttl: $(ORG_TREE) | temp
 	$(ROBOT) filter --input $< --term OBI:0100026\
 	 --select "descendants annotations" \
-	query --update util/rename.ru \
+	query --update $(QUERIES)/rename.ru \
 	remove --term oboInOwl:hasLabelSource --trim true --output $@
 
 # upper file is just top-level structure for the protein tree
@@ -173,25 +206,25 @@ temp/organism-proteins.ttl: $(ORG_TREE) | temp
 # asserts the top-level organism protein classes as SC of 'protein'
 .INTERMEDIATE: temp/upper.ttl
 temp/upper.ttl: temp/organism-proteins.ttl
-	$(ROBOT) query --input $< --query util/construct-upper.rq $@
+	$(ROBOT) query --input $< --query $(QUERIES)/construct-upper.rq $@
 
 # create protein synonyms from the source table
-.INTERMEDIATE: temp/source-synonyms.ttl | temp
-temp/source-synonyms.ttl: $(SOURCE_TABLE)
-	python util/add-synonyms.py $< $@
+.INTERMEDIATE: temp/source-synonyms.ttl
+temp/source-synonyms.ttl: $(SOURCES) $(PROTEINS) | temp
+	$(SCRIPTS)/add-synonyms.py $^ $@
 
 # IEDB proteins created from parent_protein table
 # links the proteins to their organisms
 # (organisms in the organism-proteins file)
 .INTERMEDIATE: temp/iedb-proteins.ttl
-temp/iedb-proteins.ttl: $(PROTEIN_TABLE)| temp
-	python util/parse-parents.py $< $@
+temp/iedb-proteins.ttl: $(PROTEINS)| temp
+	$(SCRIPTS)/parse-parents.py $< $@
 
 # finds all NCBITaxon classes used by IEDB proteins as Proteome IDs
 # use TDB on disk to speed up processing
 .INTERMEDIATE: temp/ncbi-classes.tsv
 temp/ncbi-classes.tsv: temp/iedb-proteins.ttl | temp
-	$(ROBOT) query --input $< --tdb true --query util/ncbi-classes.rq $@
+	$(ROBOT) query --input $< --tdb true --query $(QUERIES)/ncbi-classes.rq $@
 
 # the following targets are used to fill in gaps between the organism-tree
 # level proteins and the proteins used in the IEDB.
@@ -199,7 +232,7 @@ temp/ncbi-classes.tsv: temp/iedb-proteins.ttl | temp
 # get a list of NCBITaxon classes already in organism-based tree
 .INTERMEDIATE: temp/included-classes.tsv
 temp/included-classes.tsv: temp/organism-proteins.ttl | temp
-	$(ROBOT) query --input $< --query util/included-classes.rq $@
+	$(ROBOT) query --input $< --query $(QUERIES)/included-classes.rq $@
 
 # create a list of classes MISSING from organism-based tree
 .INTERMEDIATE: temp/missing-classes.txt
@@ -216,7 +249,7 @@ temp/taxon-proteins.owl: $(SUB_TREE) temp/missing-classes.txt \
 	 --term rdfs:subClassOf --select "self ancestors annotations" \
 	remove --term NCBITaxon:1 --term OBI:0100026 --term NCBITaxon:28384\
 	 --term NCBITaxon:32644 --trim true \
-	query --update util/rename.ru \
+	query --update $(QUERIES)/rename.ru \
 	remove --term oboInOwl:hasLabelSource --trim true \
 	merge --input $(word 3,$^) --output $@
 
@@ -228,12 +261,13 @@ temp/taxon-proteins.owl: $(SUB_TREE) temp/missing-classes.txt \
 # fix incorrect IEDB IRIs
 .INTERMEDIATE: temp/merged.owl
 temp/merged.owl: temp/taxon-proteins.owl temp/upper.ttl \
- temp/iedb-proteins.ttl temp/source-synonyms.ttl
-	$(ROBOT) merge --input $< --input $(word 2,$^)\
-	 --input $(word 3,$^) --input $(word 4,$^) \
+ temp/iedb-proteins.ttl temp/source-synonyms.ttl build/branches.owl.gz
+	$(eval INPUTS := $(foreach I,$^, --input $(I)))
+	$(ROBOT) merge $(INPUTS) \
 	annotate --ontology-iri $(BASE)/protein-tree.owl\
 	 --version-iri $(BASE)/$(TODAY)/protein-tree.owl  --output $@ && \
 	sed -i .bak 's/$(DOUBLE_NCBIT)/$(IEDB)/g' $@ && \
 	sed -i .bak 's/$(NCBIT)/$(IEDB)/g' $@ && \
 	sed -i .bak 's/$(BAD_IEDB)/$(IEDB)/g' $@ && \
 	rm -f $@.bak
+
